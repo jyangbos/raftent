@@ -7,7 +7,8 @@ import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
-import org.raftent.impl.RaftMessage;
+
+import org.raftent.impl.messages.RaftMessage;
 import org.raftent.rpc.ObjectDataConverter;
 import org.raftent.rpc.RaftRpcException;
 import org.raftent.rpc.Sender;

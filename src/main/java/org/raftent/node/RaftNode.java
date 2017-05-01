@@ -3,8 +3,8 @@ package org.raftent.node;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-import org.raftent.impl.RaftMessage;
 import org.raftent.impl.RaftPartition;
+import org.raftent.impl.messages.RaftMessage;
 import org.raftent.rpc.MessageHandler;
 import org.raftent.rpc.Messager;
 import org.raftent.rpc.MessagerFactory;

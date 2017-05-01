@@ -1,8 +1,8 @@
-package org.raftent.impl;
+package org.raftent.impl.messages;
 
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
-class AddEntryRequest extends RaftMessage {
+public class AddEntryRequest extends RaftMessage {
 	private String requestId;
 	private int nodeId;
 	private long timestamp;

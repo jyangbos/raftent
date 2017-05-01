@@ -1,6 +1,6 @@
-package org.raftent.impl;
+package org.raftent.impl.messages;
 
-class VoteResponse extends RaftMessage {
+public class VoteResponse extends RaftMessage {
 	private long term;
 	private int voteBy;
 

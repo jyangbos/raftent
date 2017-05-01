@@ -1,6 +1,6 @@
-package org.raftent.impl;
+package org.raftent.impl.messages;
 
-class AppendEntriesRequest extends RaftMessage {
+public class AppendEntriesRequest extends RaftMessage {
 	private long term;
 	private int leaderId;
 	private long prevLogIndex;

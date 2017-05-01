@@ -20,23 +20,17 @@ class PersistentStore {
 	private MappedByteBuffer dataBuffer;
 
 	PersistentStore(String logFilePrefix) throws RaftNodeException {
-		boolean newLog = false;
 		try (RandomAccessFile indexFileHandle = new RandomAccessFile(String.format("%s.idx", logFilePrefix), "rw");
 				FileChannel indexFileChannel = indexFileHandle.getChannel();
 				RandomAccessFile dataFileHandle = new RandomAccessFile(String.format("%s.dat", logFilePrefix), "rw");
 				FileChannel dataFileChannel = dataFileHandle.getChannel();) {
-			if (indexFileChannel.size() == 0) {
-				newLog = true;
-			}
 			indexBuffer = indexFileChannel.map(FileChannel.MapMode.READ_WRITE, 0, MAX_LOG_BUFFER);
-			if (newLog) {
+			dataBuffer = dataFileChannel.map(FileChannel.MapMode.READ_WRITE, 0, MAX_LOG_BUFFER);
+			if (indexFileChannel.size() == 0) {
 				setCurrentTerm(0);
 				setVotedFor(-1);
 				setLastLogIndex(0);
 				setFirstLogIndex(0);
-			}
-			dataBuffer = dataFileChannel.map(FileChannel.MapMode.READ_WRITE, 0, MAX_LOG_BUFFER);
-			if (newLog) {
 				dataBuffer.position(POS_DATA_INDEX);
 				dataBuffer.putLong(8);
 			}

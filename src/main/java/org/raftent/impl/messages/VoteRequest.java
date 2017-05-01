@@ -1,6 +1,6 @@
-package org.raftent.impl;
+package org.raftent.impl.messages;
 
-class VoteRequest extends RaftMessage {
+public class VoteRequest extends RaftMessage {
 	private long term;
 	private int candidateId;
 	private long lastLogIndex;

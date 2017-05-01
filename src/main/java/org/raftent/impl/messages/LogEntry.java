@@ -1,8 +1,8 @@
-package org.raftent.impl;
+package org.raftent.impl.messages;
 
 import com.fasterxml.jackson.annotation.JsonTypeInfo;
 
-class LogEntry {
+public class LogEntry {
 	private long termId;
 	@JsonTypeInfo(use = JsonTypeInfo.Id.CLASS)
 	private Object entry;

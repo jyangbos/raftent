@@ -1,6 +1,6 @@
-package org.raftent.impl;
+package org.raftent.impl.messages;
 
-class AddEntryResponse extends RaftMessage {
+public class AddEntryResponse extends RaftMessage {
 	private String requestId;
 	private boolean success;
 

@@ -12,6 +12,13 @@ import java.util.concurrent.Future;
 import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 
+import org.raftent.impl.messages.AddEntryRequest;
+import org.raftent.impl.messages.AddEntryResponse;
+import org.raftent.impl.messages.AppendEntriesRequest;
+import org.raftent.impl.messages.AppendEntriesResponse;
+import org.raftent.impl.messages.LogEntry;
+import org.raftent.impl.messages.VoteRequest;
+import org.raftent.impl.messages.VoteResponse;
 import org.raftent.node.LogProposal;
 import org.raftent.node.RaftNodeException;
 import org.raftent.node.StateMachine;
@@ -36,8 +43,8 @@ public class RaftPartition implements LogProposal {
 	private Set<Integer> voteCount;
 	private int leaderId;
 	// for leaders
-	private long[] nextIndex;
-	private long[] matchIndex;
+	private long[] nextIndices;
+	private long[] matchIndices;
 
 	// for local
 	private volatile NodeState state;
@@ -54,6 +61,7 @@ public class RaftPartition implements LogProposal {
 	private final int pingTimeout;
 
 	public RaftPartition(int id, Sender[] senders, String logFilePrefix, StateMachine fsm, ObjectDataConverter converter, int inactivityTimeout) throws RaftNodeException {
+		this.id = id;
 		this.fsmId = fsm.getName();
 		this.senders = senders;
 		rand = new Random(System.currentTimeMillis() + id);
@@ -63,7 +71,6 @@ public class RaftPartition implements LogProposal {
 		pingTimeout = inactivityTimeout >> 2;
 		//
 		state = NodeState.FOLLOWER;
-		this.id = id;
 		lastPing = System.currentTimeMillis();
 		nextElection = lastPing;
 		leaderId = -1;
@@ -72,8 +79,8 @@ public class RaftPartition implements LogProposal {
 		//
 		commitIndex = 0;
 		lastApplied = 0;
-		nextIndex = new long[senders.length];
-		matchIndex = new long[senders.length];
+		nextIndices = new long[senders.length];
+		matchIndices = new long[senders.length];
 		//
 		logFilePrefix = fsm != null ? String.format("%s_%s", logFilePrefix, fsm.getName()) : logFilePrefix;
 		dataStore = new PersistentStore(String.format("%s_%d", logFilePrefix, id));
@@ -105,27 +112,21 @@ public class RaftPartition implements LogProposal {
 	}
 
 	private void ping() throws RaftRpcException {
-		AppendEntriesRequest pingReq = null;
+		AppendEntriesRequest pingReq = new AppendEntriesRequest(fsmId, currentTerm, id, -1, -1, null, commitIndex);
 		for (int i = 0; i < senders.length; i++) {
-			if (i != id) {
-				if (nextIndex[i] < lastLogIndex) {
-					AppendEntriesRequest replicationReq = prepareAppendEntriesRequest(currentTerm, nextIndex[i]);
-					senders[i].send(replicationReq);
-				}
-				else {
-					if (pingReq == null) {
-						pingReq = new AppendEntriesRequest(fsmId, currentTerm, id, -1, -1, null, commitIndex);
-					}
-					senders[i].send(pingReq);
-				}
+			if (i == id) {
+				continue;
 			}
+			AppendEntriesRequest req = nextIndices[i] < lastLogIndex ?
+										prepareAppendEntriesRequest(currentTerm, nextIndices[i]) : pingReq;
+			senders[i].send(req);
 		}
 		lastPing = System.currentTimeMillis();
 	}
 
 	private void handleCommitUpdate() throws RaftRpcException {
-		for (long i = lastApplied + 1; i <= commitIndex; i++) {
-			if (fsm != null) {
+		if (fsm != null) {
+			for (long i = lastApplied + 1; i <= commitIndex; i++) {
 				fsm.transitState(getLogEntry(i).getEntry());
 			}
 		}
@@ -198,7 +199,7 @@ public class RaftPartition implements LogProposal {
 				pendingCommits.put(lastLogIndex, req);
 				for (int i = 0; i < senders.length; i++) {
 					if (i != id) {
-						AppendEntriesRequest replicationReq = prepareAppendEntriesRequest(currentTerm, nextIndex[i]);
+						AppendEntriesRequest replicationReq = prepareAppendEntriesRequest(currentTerm, nextIndices[i]);
 						senders[i].send(replicationReq);
 					}
 				}
@@ -245,14 +246,14 @@ public class RaftPartition implements LogProposal {
 		}
 		if (state == NodeState.FOLLOWER) {
 			if (reqTerm < currentTerm) {
-				senders[req.getLeaderId()].send(new AppendEntriesResponse(fsmId, id, currentTerm, lastLogIndex,  false));
+				senders[leaderId].send(new AppendEntriesResponse(fsmId, id, currentTerm, lastLogIndex,  false));
 				return;
 			}
 			else {
 				long preIndex = req.getPrevLogIndex();
 				LogEntry preEntry = getLogEntry(preIndex);
 				if (preIndex > 0 && (preEntry == null || preEntry.getTermId() != req.getPrevLogTerm())) {
-					senders[req.getLeaderId()].send(new AppendEntriesResponse(fsmId, id, currentTerm, lastLogIndex, false));
+					senders[leaderId].send(new AppendEntriesResponse(fsmId, id, currentTerm, lastLogIndex, false));
 					return;
 				}
 				LogEntry[] entries = req.getEntries();
@@ -268,7 +269,7 @@ public class RaftPartition implements LogProposal {
 					commitIndex = leaderCommit < index ? leaderCommit : index;
 					handleCommitUpdate();
 				}
-				senders[req.getLeaderId()].send(new AppendEntriesResponse(fsmId, id, currentTerm, lastLogIndex, true));
+				senders[leaderId].send(new AppendEntriesResponse(fsmId, id, currentTerm, lastLogIndex, true));
 				return;
 			}
 		}
@@ -284,29 +285,27 @@ public class RaftPartition implements LogProposal {
 		if (state == NodeState.LEADER) {
 			int followerId = resp.getId();
 			if (resp.getSuccess()) {
-				matchIndex[followerId] = resp.getLastLogIndex();
-				nextIndex[followerId] = matchIndex[followerId] + 1;
-				matchIndex[id] = lastLogIndex;
-				long[] temp = matchIndex.clone();
+				matchIndices[followerId] = resp.getLastLogIndex();
+				nextIndices[followerId] = matchIndices[followerId] + 1;
+				matchIndices[id] = lastLogIndex;
+				long[] temp = matchIndices.clone();
 				Arrays.sort(temp);
-				int i = temp.length - 1;
-				for (; i >= temp.length/2; i--) {
+				final int upper = temp.length - (temp.length >> 1) - 1;
+				for (int i = upper; i >= 0 && temp[i] > commitIndex; i--) {
 					LogEntry entry = getLogEntry(temp[i]);
-					if (currentTerm != entry.getTermId()) {
+					if (currentTerm == entry.getTermId()) {
+						commitIndex = temp[i];
+						handleCommitUpdate();
 						break;
 					}
 				}
-				if (i < (temp.length/2) && commitIndex < temp[i+1]) {
-					commitIndex = temp[i+1];
-					handleCommitUpdate();
-				}
 			}
 			else {
-				nextIndex[followerId] += -1;
-				if (nextIndex[followerId] == 0) {
-					nextIndex[followerId] = 1;
+				nextIndices[followerId] += -1;
+				if (nextIndices[followerId] == 0) {
+					nextIndices[followerId] = 1;
 				}
-				AppendEntriesRequest replicationReq = prepareAppendEntriesRequest(currentTerm, nextIndex[followerId]);
+				AppendEntriesRequest replicationReq = prepareAppendEntriesRequest(currentTerm, nextIndices[followerId]);
 				senders[followerId].send(replicationReq);
 			}
 		}
@@ -314,8 +313,9 @@ public class RaftPartition implements LogProposal {
 
 	private void handleVoteRequest(VoteRequest req) throws RaftRpcException {
 		long reqTerm = req.getTerm();
+		int candidateId = req.getCandidateId();
 		if (reqTerm < currentTerm) {
-			senders[req.getCandidateId()].send(new VoteResponse(fsmId, currentTerm, id - senders.length));
+			senders[candidateId].send(new VoteResponse(fsmId, currentTerm, id - senders.length));
 			return;
 		}
 		if (currentTerm < reqTerm) {
@@ -324,17 +324,17 @@ public class RaftPartition implements LogProposal {
 			state = NodeState.FOLLOWER;
 		}
 		votedFor = dataStore.getVotedFor();
-		if (state != NodeState.CANDIDATE && (votedFor == -1 || votedFor == req.getCandidateId())) {
+		if (state != NodeState.CANDIDATE && (votedFor == -1 || votedFor == candidateId)) {
 			if (req.getLastLogIndex() >= lastLogIndex && req.getLastLogTerm() >= (lastLogIndex == 0 ? 0 : getLogEntry(lastLogIndex).getTermId())) {
-				senders[req.getCandidateId()].send(new VoteResponse(fsmId, currentTerm, id));
-				votedFor = req.getCandidateId();
+				senders[candidateId].send(new VoteResponse(fsmId, currentTerm, id));
+				votedFor = candidateId;
 				dataStore.setVotedFor(votedFor);
-				// prevent from initiating the vote process too quickly.
+				// prevent from initiating the next vote process too quickly.
 				nextElection = nextElectionTime();
 				return;
 			}
 		}
-		senders[req.getCandidateId()].send(new VoteResponse(fsmId, currentTerm, id - senders.length));
+		senders[candidateId].send(new VoteResponse(fsmId, currentTerm, id - senders.length));
 	}
 
 	private void handleVoteResponse(VoteResponse resp) throws RaftRpcException {
@@ -355,9 +355,9 @@ public class RaftPartition implements LogProposal {
 					if (voteCount.size() > (senders.length/2)) {
 						state = NodeState.LEADER;
 						leaderId = id;
-						for (int i = 0; i < nextIndex.length; i++) {
-							nextIndex[i] = lastLogIndex + 1;
-							matchIndex[i] = 0;
+						for (int i = 0; i < nextIndices.length; i++) {
+							nextIndices[i] = lastLogIndex + 1;
+							matchIndices[i] = 0;
 						}
 						logger.debug("Elected leader {}", leaderId);
 					}

@@ -1,4 +1,4 @@
-package org.raftent.impl;
+package org.raftent.impl.messages;
 
 public class RaftMessage {
 	private String fsmId;

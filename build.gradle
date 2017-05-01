@@ -20,6 +20,8 @@ dependencies {
      compile 'com.fasterxml.jackson.core:jackson-databind:2.8.7',
              'org.slf4j:slf4j-api:1.7.21'
 
+     runtime 'org.slf4j:slf4j-simple:1.8.0-alpha2'
+
     // Use JUnit test framework
     testCompile 'junit:junit:4.12'
 }
