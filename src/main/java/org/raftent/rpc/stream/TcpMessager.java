@@ -87,7 +87,7 @@ public class TcpMessager implements Messager, ObjectDataConverter, Receiver {
 		if (keys == null) {
 			return;
 		}
-		for (SelectionKey k : keys) { try {
+		for (SelectionKey k : keys) {
 			if (k.isValid() && k.isAcceptable()) {
 				SocketChannel channel;
 				try {
@@ -151,7 +151,7 @@ public class TcpMessager implements Messager, ObjectDataConverter, Receiver {
 				SocketChannel channel = (SocketChannel)k.channel();
 				try {
 					StreamSenderImpl sender = senderMap.get(channel);
-					if (sender == null || (System.currentTimeMillis() > (sender.getLastConnectTry() + 1000))) {
+					if (sender == null || (System.currentTimeMillis() > (sender.getLastConnectTry() + 5000))) {
 						channel.finishConnect();
 						channel.configureBlocking(false);
 						logger.debug("finish connect to {}", channel);
@@ -179,7 +179,7 @@ public class TcpMessager implements Messager, ObjectDataConverter, Receiver {
 						}
 					}
 				}
-			} } catch (Exception e) { e.printStackTrace(); }
+			}
 		}
 		keys.clear();
 	}
