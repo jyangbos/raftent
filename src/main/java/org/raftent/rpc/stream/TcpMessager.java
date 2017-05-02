@@ -11,7 +11,6 @@ import java.nio.channels.SocketChannel;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-
 import org.raftent.rpc.MessageHandler;
 import org.raftent.rpc.Messager;
 import org.raftent.rpc.ObjectDataConverter;
@@ -73,112 +72,36 @@ public class TcpMessager implements Messager, ObjectDataConverter, Receiver {
 		} catch (IOException e) {
 			return;
 		}
+		try {
+			timeoutHandler.handle(null);
+		} catch (RaftRpcException e) {
+			logger.debug("Failed to handle timeout", e);
+		}
 		Set<SelectionKey> keys = null;
 		try {
 			keys = selector.selectedKeys();
 		} catch (Exception e) {
 			logger.debug("Failed to get selected keys", e);
 		}
-		try {
-			timeoutHandler.handle(null);
-		} catch (RaftRpcException e) {
-			logger.debug("Failed to handle timeout", e);
-		}
 		if (keys == null) {
 			return;
 		}
 		for (SelectionKey k : keys) {
 			if (k.isValid() && k.isAcceptable()) {
-				SocketChannel channel;
-				try {
-					channel = serverChannel.accept();
-					channel.configureBlocking(false);
-					channel.register(selector, SelectionKey.OP_READ);
-					logger.debug("accept from {}", channel);
-				} catch (IOException e) {
-					logger.debug("Failed to accept a connection", e);
-				}
+				acceptConnection();
 			}
 			if (k.isValid() && k.isReadable()) {
-				SocketChannel channel = (SocketChannel)k.channel();
-				ByteBuffer dataBytes;
-				ByteBuffer mdata = (ByteBuffer)k.attachment();
-				if (mdata != null) {
-					dataBytes = mdata;
-				}
-				else {
-					ByteBuffer len = ByteBuffer.allocate(4);
-					try {
-						if (-1 == channel.read(len)) {
-							channel.close();
-							continue;
-						}
-					} catch (IOException e) {
-						logger.debug("Failed to read len", e);
-						continue;
-					}
-					len.flip();
-					dataBytes = ByteBuffer.allocate(len.getInt());
-				}
-				try {
-					if (-1 == channel.read(dataBytes)) {
-						channel.close();
-						continue;
-					}
-				} catch (IOException e) {
-					logger.debug("Failed to read data", e);
-					continue;
-				}
-				if (dataBytes.remaining() != 0) {
-					if (mdata == null) {
-						k.attach(dataBytes);
-					}
-					continue;
-				}
-				Object object;
-				try {
-					object = toObject(dataBytes.array());
-					if (mdata != null) {
-						k.attach(null);
-					}
-					handler.handle(object);
-				} catch (RaftRpcException e) {
-					logger.debug("Failed to process data", e);
-					continue;
-				}
+				readData(k);
 			}
 			if (k.isValid() && k.isConnectable()) {
 				SocketChannel channel = (SocketChannel)k.channel();
-				try {
-					StreamSenderImpl sender = senderMap.get(channel);
-					if (sender == null || (System.currentTimeMillis() > (sender.getLastConnectTry() + 5000))) {
-						channel.finishConnect();
-						channel.configureBlocking(false);
-						logger.debug("finish connect to {}", channel);
-					}
-				} catch (IOException e) {
-					logger.debug("Failed to complete connection", e);
-					updateWriteChannle(k);
+				StreamSenderImpl sender = senderMap.get(channel);
+				if (sender == null || sender.checkLastConnectTry()) {
+					finishConnection(k);
 				}
 			}
 			if (k.isValid() && k.isWritable()) {
-				synchronized (k) {
-					SocketChannel channel = (SocketChannel)k.channel();
-					ByteBuffer dataBuffer = (ByteBuffer)k.attachment();
-					if (dataBuffer != null) {
-						if (dataBuffer.remaining() != 0) {
-							try {
-								channel.write(dataBuffer);
-							} catch (IOException e) {
-								logger.debug("Failed to write data", e);
-								updateWriteChannle(k);
-							}
-						}
-						if (dataBuffer.remaining() == 0) {
-							k.attach(null);
-						}
-					}
-				}
+				writeData(k);
 			}
 		}
 		keys.clear();
@@ -198,7 +121,103 @@ public class TcpMessager implements Messager, ObjectDataConverter, Receiver {
 	public ObjectDataConverter getObjectDataConverter() {
 		return this;
 	}
-	
+
+	private void acceptConnection() {
+		SocketChannel channel;
+		try {
+			channel = serverChannel.accept();
+			channel.configureBlocking(false);
+			channel.register(selector, SelectionKey.OP_READ);
+			logger.debug("accept from {}", channel);
+		} catch (IOException e) {
+			logger.debug("Failed to accept a connection", e);
+		}
+	}
+
+	private void readData(SelectionKey k) {
+		SocketChannel channel = (SocketChannel)k.channel();
+		ByteBuffer dataBytes;
+		ByteBuffer mdata = (ByteBuffer)k.attachment();
+		if (mdata != null) {
+			dataBytes = mdata;
+		}
+		else {
+			ByteBuffer len = ByteBuffer.allocate(4);
+			try {
+				if (-1 == channel.read(len)) {
+					channel.close();
+					return;
+				}
+			} catch (IOException e) {
+				logger.debug("Failed to read len", e);
+				return;
+			}
+			len.flip();
+			dataBytes = ByteBuffer.allocate(len.getInt());
+		}
+		try {
+			if (-1 == channel.read(dataBytes)) {
+				channel.close();
+				return;
+			}
+		} catch (IOException e) {
+			logger.debug("Failed to read data", e);
+			return;
+		}
+		if (dataBytes.remaining() != 0) {
+			if (mdata == null) {
+				k.attach(dataBytes);
+			}
+			return;
+		}
+		Object object;
+		try {
+			object = toObject(dataBytes.array());
+			if (mdata != null) {
+				k.attach(null);
+			}
+			handler.handle(object);
+		} catch (RaftRpcException e) {
+			logger.debug("Failed to process data", e);
+		}
+	}
+
+	private void finishConnection(SelectionKey k) {
+		SocketChannel channel = (SocketChannel)k.channel();
+		try {
+			channel.finishConnect();
+			channel.configureBlocking(false);
+			StreamSenderImpl sender = senderMap.get(channel);
+			if (sender != null) {
+				sender.updateConnection();
+			}
+			logger.debug("finish connect to {}", channel);
+		} catch (IOException e) {
+			logger.debug("Failed to complete connection", e);
+			updateWriteChannle(k);
+		}
+	}
+
+	private void writeData(SelectionKey k) {
+		synchronized (k) {
+			SocketChannel channel = (SocketChannel)k.channel();
+			ByteBuffer dataBuffer = (ByteBuffer)k.attachment();
+			if (dataBuffer != null) {
+				if (dataBuffer.remaining() != 0) {
+					try {
+						channel.write(dataBuffer);
+					} catch (IOException e) {
+						logger.debug("Failed to write data", e);
+						updateWriteChannle(k);
+					}
+				}
+				if (dataBuffer.remaining() == 0) {
+					k.attach(null);
+				}
+			}
+		}
+	}
+
 	private void updateWriteChannle(SelectionKey k) {
 		SocketChannel channel = (SocketChannel)k.channel();
 		StreamSenderImpl sender = senderMap.get(channel);

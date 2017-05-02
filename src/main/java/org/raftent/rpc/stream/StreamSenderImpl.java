@@ -24,6 +24,7 @@ class StreamSenderImpl implements Sender {
 	private Selector selector;
 	private SelectionKey socketKey;
 	private long lastConnectTry;
+	private int connectRetryCount;
 
 	StreamSenderImpl(String host, int port, ObjectDataConverter converter, Selector selector) throws RaftRpcException {
 		this.converter = converter;
@@ -68,8 +69,19 @@ class StreamSenderImpl implements Sender {
 		return socketChannel;
 	}
 	
-	public long getLastConnectTry() {
-		return lastConnectTry;
+	public boolean checkLastConnectTry() {
+		long now = System.currentTimeMillis();
+		int maxInterval = 5*60*1000;
+		int nextInterval = 5000*connectRetryCount;
+		if (nextInterval > maxInterval) {
+			nextInterval = maxInterval;
+		}
+		return now > (lastConnectTry + nextInterval);
+	}
+
+	public void updateConnection() {
+		lastConnectTry = System.currentTimeMillis();
+		connectRetryCount = 0;
 	}
 
 	void reconnect() throws RaftRpcException {
@@ -79,6 +91,7 @@ class StreamSenderImpl implements Sender {
 			socketChannel.connect(addr);
 			socketKey = socketChannel.register(selector, SelectionKey.OP_CONNECT | SelectionKey.OP_WRITE);
 			lastConnectTry = System.currentTimeMillis();
+			connectRetryCount++;
 		} catch (IOException e) {
 			throw new RaftRpcException(e);
 		}
